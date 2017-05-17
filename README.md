@@ -1,0 +1,3 @@
+﻿# Event sourcing with Akka Stream
+
+...
