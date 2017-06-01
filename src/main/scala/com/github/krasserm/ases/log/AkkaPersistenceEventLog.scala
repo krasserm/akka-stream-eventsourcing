@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.github.krasserm.ases.log.ap
+package com.github.krasserm.ases.log
 
 import akka.actor.ActorSystem
 import akka.persistence.Journal
@@ -27,6 +27,7 @@ import scala.reflect.ClassTag
 
 /**
   * Akka Stream API for events logs managed by an Akka Persistence journal.
+  * An individual event log is identified by `persistenceId`.
   *
   * @param journalId Id of the Akka Persistence journal.
   */
@@ -57,7 +58,7 @@ class AkkaPersistenceEventLog(journalId: String)(implicit system: ActorSystem) {
     journal.eventLog[A](persistenceId)
 
   /**
-    * Creates a source that replays all events of the event log identified by
+    * Creates a source that replays events of the event log identified by
     * `persistenceId`. The source completes when the end of the event log is
     * reached (i.e. it is not a live source in contrast to the output of
     * [[flow]]).
@@ -74,8 +75,6 @@ class AkkaPersistenceEventLog(journalId: String)(implicit system: ActorSystem) {
     * `persistenceId`.
     *
     * @param persistenceId persistence id of the event log.
-    * @tparam A event type. Only events that are instances of given type are
-    *           emitted by the source.
     */
   def sink[A: ClassTag](persistenceId: String): Sink[A, Future[Done]] =
     journal.eventSink[A](persistenceId)

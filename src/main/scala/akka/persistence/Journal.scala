@@ -25,6 +25,7 @@ import akka.stream.{Attributes, FlowShape, Inlet, Outlet}
 import akka.util.Timeout
 import akka.{Done, NotUsed}
 import com.github.krasserm.ases.DeliveryProtocol._
+import com.github.krasserm.ases.log.replayed
 
 import scala.collection.immutable.{Seq, VectorBuilder}
 import scala.concurrent.Future
@@ -32,17 +33,10 @@ import scala.concurrent.duration._
 import scala.reflect.ClassTag
 import scala.util._
 
-object Journal {
-  def replayed[A]: Flow[Delivery[A], A, NotUsed] =
-    Flow[Delivery[A]].takeWhile(_ != Recovered).collect { case Delivered(event) => event }
-}
-
 /**
-  * @see [[com.github.krasserm.ases.log.ap.AkkaPersistenceEventLog]]
+  * @see [[com.github.krasserm.ases.log.AkkaPersistenceEventLog]]
   */
 class Journal(journalId: String)(implicit system: ActorSystem) {
-  import Journal._
-
   private val extension = Persistence(system)
   private val journalActor = extension.journalFor(journalId)
 

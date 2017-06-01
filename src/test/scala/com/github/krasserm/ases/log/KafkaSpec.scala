@@ -14,24 +14,25 @@
  * limitations under the License.
  */
 
-package com.github.krasserm.ases
+package com.github.krasserm.ases.log
 
-import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.{Flow, Keep}
-import akka.stream.testkit.scaladsl.{TestSink, TestSource}
-import akka.stream.testkit.{TestPublisher, TestSubscriber}
 import akka.testkit.TestKit
 import org.scalatest.{BeforeAndAfterAll, Suite}
 
-trait StreamSpec extends BeforeAndAfterAll { this: TestKit with Suite =>
-  implicit val materializer = ActorMaterializer()
+trait KafkaSpec extends BeforeAndAfterAll { this: TestKit with Suite =>
+  override protected def beforeAll(): Unit = {
+    super.beforeAll()
+    KafkaServer.start()
+  }
 
   override def afterAll(): Unit = {
-    materializer.shutdown()
-    TestKit.shutdownActorSystem(system)
+    KafkaServer.stop()
     super.afterAll()
   }
 
-  def probes[I, O, M](flow: Flow[I, O, M]): (TestPublisher.Probe[I], TestSubscriber.Probe[O]) =
-    TestSource.probe[I].viaMat(flow)(Keep.left).toMat(TestSink.probe[O])(Keep.both).run()
+  def host: String =
+    "localhost"
+
+  def port: Int =
+    KafkaServer.kafkaPort
 }

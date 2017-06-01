@@ -14,38 +14,42 @@
  * limitations under the License.
  */
 
-package com.github.krasserm.ases.log.ap
+package com.github.krasserm.ases.log
 
 import akka.actor.ActorSystem
 import akka.stream.scaladsl.{Sink, Source}
 import akka.testkit.TestKit
 import com.github.krasserm.ases.DeliveryProtocol.{Delivered, Recovered}
 import com.github.krasserm.ases.StreamSpec
+import org.apache.kafka.common.TopicPartition
 import org.scalatest.concurrent.ScalaFutures
+import org.scalatest.time.{Millis, Seconds, Span}
 import org.scalatest.{Matchers, WordSpecLike}
 
 import scala.collection.immutable.Seq
 
-class AkkaPersistenceEventLogSpec extends TestKit(ActorSystem("test")) with WordSpecLike with Matchers with ScalaFutures with StreamSpec {
-  val akkaPersistenceEventLog: AkkaPersistenceEventLog = new AkkaPersistenceEventLog(journalId = "akka.persistence.journal.inmem")
+class KafkaEventLogSpec extends TestKit(ActorSystem("test")) with WordSpecLike with Matchers with ScalaFutures with StreamSpec with KafkaSpec {
+  implicit val pc = PatienceConfig(timeout = Span(5, Seconds), interval = Span(10, Millis))
 
-  "An Akka Persistence event log" must {
+  val kafkaEventLog: KafkaEventLog = new KafkaEventLog(host, port)
+
+  "A Kafka event log" must {
     "provide a sink for writing events and a source for delivering replayed events" in {
-      val persistenceId = "1"
+      val topicPartition = new TopicPartition("p-1", 0)
       val events = Seq("a", "b", "c")
 
-      Source(events).runWith(akkaPersistenceEventLog.sink(persistenceId)).futureValue
-      akkaPersistenceEventLog.source[String](persistenceId).runWith(Sink.seq).futureValue should be(events)
+      Source(events).runWith(kafkaEventLog.sink(topicPartition)).futureValue
+      kafkaEventLog.source[String](topicPartition).runWith(Sink.seq).futureValue should be(events)
     }
     "provide a flow with an input port for writing events and and output port for delivering replayed and live events" in {
-      val persistenceId = "2"
+      val topicPartition = new TopicPartition("p-2", 0)
       val events1 = Seq("a", "b", "c")
       val events2 = Seq("d", "e", "f")
 
       val expected = (events1.map(Delivered(_)) :+ Recovered) ++ events2.map(Delivered(_))
 
-      Source(events1).runWith(akkaPersistenceEventLog.sink(persistenceId)).futureValue
-      Source(events2).via(akkaPersistenceEventLog.flow(persistenceId)).runWith(Sink.seq).futureValue should be(expected)
+      Source(events1).runWith(kafkaEventLog.sink(topicPartition)).futureValue
+      Source(events2).via(kafkaEventLog.flow(topicPartition)).take(7).runWith(Sink.seq).futureValue should be(expected)
     }
   }
 }
