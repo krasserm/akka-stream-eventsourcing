@@ -42,7 +42,7 @@ import scala.reflect.ClassTag
   *
   * '''This implementation is for testing only!''' It does not prevent or
   * compensate duplicate or re-ordered writes to topic partitions during
-  * failures.
+  * failures. Also, event retention time is assumed to be infinite.
   *
   * @param host Kafka (bootstrap server) host.
   * @param port Kafka (bootstrap server) port.

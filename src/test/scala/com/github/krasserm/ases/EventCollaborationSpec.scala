@@ -18,13 +18,16 @@ package com.github.krasserm.ases
 
 import akka.NotUsed
 import akka.actor.ActorSystem
-import akka.stream.scaladsl.Flow
+import akka.stream.scaladsl.{Flow, Sink}
 import akka.testkit.TestKit
+import com.github.krasserm.ases.EventSourcing.Identified
 import com.github.krasserm.ases.log.{KafkaEventLog, KafkaSpec}
 import org.apache.kafka.common.TopicPartition
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.time.{Millis, Seconds, Span}
 import org.scalatest.{Matchers, WordSpecLike}
+
+import scala.collection.immutable.Seq
 
 class EventCollaborationSpec extends TestKit(ActorSystem("test")) with WordSpecLike with Matchers with ScalaFutures with StreamSpec with KafkaSpec {
   import EventSourcingSpec._
@@ -37,9 +40,8 @@ class EventCollaborationSpec extends TestKit(ActorSystem("test")) with WordSpecL
   def processor(topicPartition: TopicPartition): Flow[Request, Response, NotUsed] =
     EventSourcing(0, requestHandler, eventHandler).join(kafkaEventLog.flow(topicPartition))
 
-
-  "A group of EventSourcing stage" when {
-    "joined with a shared event log" must {
+  "A group of EventSourcing stages" when {
+    "joined with a shared event log" can {
       "collaborate via publish-subscribe" in {
         val topicPartition = new TopicPartition("p-1", 0)    // shared topic partition
         val (pub1, sub1) = probes(processor(topicPartition)) // processor 1
@@ -54,6 +56,10 @@ class EventCollaborationSpec extends TestKit(ActorSystem("test")) with WordSpecL
         // Both processors receive event but
         // only processor 2 creates response
         sub2.requestNext(Response(-1))
+
+        // consume and verify events emitted by both processors
+        kafkaEventLog.source[Identified[Incremented]](topicPartition).runWith(Sink.seq)
+          .futureValue.map(_.event) should be(Seq(Incremented(3), Incremented(-4)))
       }
     }
   }
