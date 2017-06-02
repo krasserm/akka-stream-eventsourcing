@@ -27,11 +27,6 @@ Event handler input is current state and a written event, output is updated stat
   import akka.stream.scaladsl.BidiFlow
   import com.github.krasserm.ases.EventSourcing
 
-  type S
-  type E
-  type REQ
-  type RES
-  
   def initialState: S
   def requestHandler: RequestHandler[S, E, REQ, RES]
   def eventHandler: EventHandler[S, E]
