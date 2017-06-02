@@ -52,10 +52,10 @@ object EventSourcing {
     * event log. Output is the updated state that is set to the current state by the
     * [[EventSourcing]] driver.
     *
-    * @tparam S
-    * @tparam E
+    * @tparam S State type.
+    * @tparam E Event type.
     */
-  type EventHandler[S, E]             = (S, E) => S
+  type EventHandler[S, E] = (S, E) => S
 
   /**
     * Used by [[EventSourcing]] to correlate emitted events with input events (preliminary solution).

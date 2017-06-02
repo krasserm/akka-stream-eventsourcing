@@ -34,7 +34,7 @@ object Router {
     * @tparam B router and processor output type
     * @tparam K key type
     */
-  def apply[A, B, K](key: A => K, processor: K => Flow[A, B, NotUsed], maxProcessors: Int = Int.MaxValue): Flow[A, B, NotUsed] =
+  def apply[A, B, K](key: A => K, processor: K => Flow[A, B, _], maxProcessors: Int = Int.MaxValue): Flow[A, B, NotUsed] =
     Flow[A].groupBy(maxProcessors, key).prefixAndTail(1).flatMapMerge(maxProcessors, {
       case (h, t) => Source(h).concat(t).via(processor(key(h.head)))
     }).mergeSubstreams
