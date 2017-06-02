@@ -121,4 +121,4 @@ The examples so far modeled event logs as `Flow[E, E, _]` which is not sufficien
  
 ## Project status
 
-In its current state, the project is a prototype that demonstrates the basic ideas how event sourcing and stream stage persistence could be added to Akka Streams. It should serve as basis for further discussions and a potential later contribution to Akka Streams, if there is interest in the community.    
+In its current state, the project is a prototype that demonstrates the basic ideas how event sourcing and event collaboration could be added to Akka Streams. It should serve as basis for [further discussions](https://github.com/akka/akka-meta/issues/51) and a potential later contribution to Akka, if there is enough interest in the community.    
