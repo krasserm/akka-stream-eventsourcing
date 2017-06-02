@@ -4,10 +4,10 @@
 
 This project brings to [Akka Streams](http://doc.akka.io/docs/akka/2.5.2/scala/stream/index.html) what [Akka Persistence](http://doc.akka.io/docs/akka/2.5.2/scala/persistence.html) brings to [Akka Actors](http://doc.akka.io/docs/akka/2.5.2/scala/actors.html): persistence via event sourcing. It provides a stateful [`EventSourcing`](https://github.com/krasserm/akka-stream-eventsourcing/blob/master/src/main/scala/com/github/krasserm/ases/EventSourcing.scala) graph stage of type `BidiFlow[REQ, E, E, RES, _]` (simplified) which models the event sourcing message flow. An `EventSourcing` stage therefore 
 
-- consumes and validates requests (commands or queries)
-- produces events (derived from commands) to be written to an event log
-- consumes written events from an event log for updating internal state
-- produces responses after internal state updates
+- consumes and validates a request (command or query)
+- produces events (derived from a command and internal state) to be written to an event log
+- consumes written events for updating internal state
+- produces a response after internal state update
  
 An `EventSourcing` stage maintains current state and uses a request handler for validating requests, generating events and generating responses:
   
