@@ -38,8 +38,8 @@ object RequestRoutingSpec {
   case class Response(aggregateId: String, state: Int)
 
   val requestHandler: RequestHandler[Int, Incremented, Request, Response] = {
-    case (_, GetState(aggregateId))     => (Seq(), Response(aggregateId, _))
-    case (s, Increment(aggregateId, d)) => (Seq(Incremented(aggregateId, d)), Response(aggregateId, _))
+    case (s, GetState(aggregateId))     => respond(Response(aggregateId, s))
+    case (_, Increment(aggregateId, d)) => emit(Seq(Incremented(aggregateId, d)), Response(aggregateId, _))
   }
 
   val eventHandler: EventHandler[Int, Incremented] =

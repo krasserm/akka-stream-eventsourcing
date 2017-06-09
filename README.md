@@ -8,14 +8,30 @@ This project brings to [Akka Streams](http://doc.akka.io/docs/akka/2.5.2/scala/s
 - produces events (derived from a command and internal state) to be written to an event log
 - consumes written events for updating internal state
 - produces a response after internal state update
- 
+
 An `EventSourcing` stage maintains current state and uses a request handler for validating requests, generating events and generating responses:
   
 ```scala
-  type RequestHandler[S, E, REQ, RES] = (S, REQ) => (Seq[E], S => RES)
+  import com.github.krasserm.ases.EventSourcing._
+
+  type RequestHandler[S, E, REQ, RES] = (S, REQ) => RequestHandlerResult[S, E, RES]
 ```
 
-Request handler input is current state and a request, output is a sequence of events and a function to generate a response from current state (after events have been written and applied to current state). For updating internal state the `EventSourcing` stage uses an event handler:
+Request handler input is current state and a request, output is an instruction to either `emit` events  
+
+```scala
+  def emit[S, E, RES](events: Seq[E], responseFactory: S => RES): RequestHandlerResult[S, E, RES]
+```
+
+or to `respond` immediately without emitting events:
+
+```scala
+  def respond[S, E, RES](response: RES): RequestHandlerResult[S, E, RES]
+```
+   
+The `emit` method also has a `responseFactory` parameter that is called with current state after all emitted events have been written and applied to current state.
+ 
+For updating internal state the `EventSourcing` stage uses an event handler:
   
 ```scala
   type EventHandler[S, E] = (S, E) => S
@@ -109,6 +125,21 @@ The following example defines a `requestProcessor` that uses an Apache Kafka top
 ```
 
 Materializations are not shown here but you can find a running example in [`EventCollaborationSpec`](https://github.com/krasserm/akka-stream-eventsourcing/blob/master/src/test/scala/com/github/krasserm/ases/EventCollaborationSpec.scala) (a replicated event-sourced counter). Collaboration of request processors is comparable to collaboration of `EventsourcedActor`s in [Eventuate](http://rbmhtechnology.github.io/eventuate/) (see [event collaboration](http://rbmhtechnology.github.io/eventuate/architecture.html#event-collaboration) for details).
+
+## Handler switching
+
+Applications can switch request and event handlers as a function of current state by defining request and event handler *providers*: 
+
+```scala
+  def initialState: S
+  def requestHandlerProvider: S => RequestHandler[S, E, REQ, RES]
+  def eventHandlerProvider: S => EventHandler[S, E]
+
+  def eventSourcingStage: BidiFlow[REQ, E, E, RES, _] =
+    EventSourcing(initialState, requestHandlerProvider, eventHandlerProvider)
+```
+   
+A request handler provider is called with current state for each request, an event handler provider is called with current state for each written event. This feature can be used, for example, to implement state machine DSLs on top the handler API.    
 
 ## Event logging protocols
  

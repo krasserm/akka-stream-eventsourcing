@@ -38,8 +38,8 @@ object EventSourcingSpec {
   case class Response(state: Int)
 
   val requestHandler: RequestHandler[Int, Incremented, Request, Response] = {
-    case (_, GetState)     => (Seq(), Response)
-    case (s, Increment(d)) => (Seq(Incremented(d)), Response)
+    case (s, GetState)     => respond(Response(s))
+    case (_, Increment(d)) => emit(Seq(Incremented(d)), Response)
   }
 
   val eventHandler: EventHandler[Int, Incremented] =
