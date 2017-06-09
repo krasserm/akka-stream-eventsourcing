@@ -1,5 +1,7 @@
 ﻿# Event sourcing for Akka Streams
 
+[![Gitter](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/akka-stream-eventsourcing/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+
 ## General concept
 
 This project brings to [Akka Streams](http://doc.akka.io/docs/akka/2.5.2/scala/stream/index.html) what [Akka Persistence](http://doc.akka.io/docs/akka/2.5.2/scala/persistence.html) brings to [Akka Actors](http://doc.akka.io/docs/akka/2.5.2/scala/actors.html): persistence via event sourcing. It provides a stateful [`EventSourcing`](https://github.com/krasserm/akka-stream-eventsourcing/blob/master/src/main/scala/com/github/krasserm/ases/EventSourcing.scala) graph stage of type `BidiFlow[REQ, E, E, RES, _]` (simplified) which models the event sourcing message flow. An `EventSourcing` stage therefore 
