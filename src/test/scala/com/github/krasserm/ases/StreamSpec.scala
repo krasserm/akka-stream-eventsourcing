@@ -23,8 +23,12 @@ import akka.stream.testkit.{TestPublisher, TestSubscriber}
 import akka.testkit.TestKit
 import org.scalatest.{BeforeAndAfterAll, Suite}
 
+import scala.collection.immutable.Seq
+
 trait StreamSpec extends BeforeAndAfterAll { this: TestKit with Suite =>
   implicit val materializer = ActorMaterializer()
+
+  val emitterId = "emitter"
 
   override def afterAll(): Unit = {
     materializer.shutdown()
@@ -34,4 +38,7 @@ trait StreamSpec extends BeforeAndAfterAll { this: TestKit with Suite =>
 
   def probes[I, O, M](flow: Flow[I, O, M]): (TestPublisher.Probe[I], TestSubscriber.Probe[O]) =
     TestSource.probe[I].viaMat(flow)(Keep.left).toMat(TestSink.probe[O])(Keep.both).run()
+
+  def durables[A](emitted: Seq[Emitted[A]], offset: Int = 0): Seq[Durable[A]] =
+    emitted.zipWithIndex.map { case (e, i) => e.durable(i + offset) }
 }

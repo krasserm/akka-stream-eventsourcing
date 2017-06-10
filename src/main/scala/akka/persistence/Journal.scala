@@ -24,46 +24,41 @@ import akka.stream.stage._
 import akka.stream.{Attributes, FlowShape, Inlet, Outlet}
 import akka.util.Timeout
 import akka.{Done, NotUsed}
-import com.github.krasserm.ases.DeliveryProtocol._
-import com.github.krasserm.ases.log.replayed
+import com.github.krasserm.ases.{Delivered, Delivery, Recovered}
 
 import scala.collection.immutable.{Seq, VectorBuilder}
 import scala.concurrent.Future
 import scala.concurrent.duration._
-import scala.reflect.ClassTag
 import scala.util._
 
-/**
-  * @see [[com.github.krasserm.ases.log.AkkaPersistenceEventLog]]
-  */
 class Journal(journalId: String)(implicit system: ActorSystem) {
   private val extension = Persistence(system)
   private val journalActor = extension.journalFor(journalId)
 
-  def eventLog[A: ClassTag](persistenceId: String): Flow[A, Delivery[A], NotUsed] =
-    Flow[A].batch(10, Vector(_))(_ :+ _).via(Flow.fromGraph(new EventLog[A](persistenceId, journalActor)))
+  def eventLog(persistenceId: String): Flow[PersistentRepr, Delivery[PersistentRepr], NotUsed] =
+    Flow[PersistentRepr].batch(10, Vector(_))(_ :+ _).via(Flow.fromGraph(new EventLog(persistenceId, journalActor)))
 
-  def eventSource[A: ClassTag](persistenceId: String): Source[A, NotUsed] =
-    Source.single(Seq.empty[A]).via(Flow.fromGraph(new EventLog[A](persistenceId, journalActor))).via(replayed)
+  def eventSource(persistenceId: String): Source[Delivery[PersistentRepr], NotUsed] =
+    Source.single(Seq.empty).via(Flow.fromGraph(new EventLog(persistenceId, journalActor)))
 
-  def eventSink[A: ClassTag](persistenceId: String): Sink[A, Future[Done]] =
-    eventLog[A](persistenceId).toMat(Sink.ignore)(Keep.right)
+  def eventSink(persistenceId: String): Sink[PersistentRepr, Future[Done]] =
+    eventLog(persistenceId).toMat(Sink.ignore)(Keep.right)
 }
 
-private class EventLog[A: ClassTag](persistenceId: String, journalActor: ActorRef)(implicit factory: ActorRefFactory) extends GraphStage[FlowShape[Seq[A], Delivery[A]]] {
+private class EventLog(persistenceId: String, journalActor: ActorRef)(implicit factory: ActorRefFactory) extends GraphStage[FlowShape[Seq[PersistentRepr], Delivery[PersistentRepr]]] {
   import EventReplayer.Replayed
   import EventWriter.Written
 
   private val writer: EventWriter = new EventWriter(persistenceId, journalActor)
   private val replayer: EventReplayer = new EventReplayer(persistenceId, journalActor)
 
-  val in = Inlet[Seq[A]]("EventLogStage.in")
-  val out = Outlet[Delivery[A]]("EventLogStage.out")
+  val in = Inlet[Seq[PersistentRepr]]("EventLogStage.in")
+  val out = Outlet[Delivery[PersistentRepr]]("EventLogStage.out")
 
   override val shape = FlowShape.of(in, out)
 
   override def createLogic(attr: Attributes): GraphStageLogic =
-    new GraphStageLogic(shape) with StageLogging {
+    new GraphStageLogic(shape) {
       private val writeSuccessCallback = getAsyncCallback(onWriteSuccess)
       private val replaySuccessCallback = getAsyncCallback(onReplaySuccess)
       private val failureCallback = getAsyncCallback(failStage)
@@ -76,7 +71,7 @@ private class EventLog[A: ClassTag](persistenceId: String, journalActor: ActorRe
       setHandler(in, new InHandler {
         override def onPush(): Unit = {
           writing = true
-          writer.write(grab(in).map(toPersistentRepr), currentSequenceNr + 1L).onComplete {
+          writer.write(grab(in).map(_.update(sequenceNr = nextSequenceNr)), currentSequenceNr + 1L).onComplete {
             case Success(written) => writeSuccessCallback.invoke(written)
             case Failure(cause)   => failureCallback.invoke(cause)
           }(materializer.executionContext)
@@ -97,14 +92,7 @@ private class EventLog[A: ClassTag](persistenceId: String, journalActor: ActorRe
 
       private def onReplaySuccess(replayed: Replayed): Unit = {
         currentSequenceNr = replayed.lastSequenceNr
-        emitMultiple(out, replayed.events.flatMap(
-          _.payload match {
-            case p: A =>
-              Seq(Delivered(p))
-            case p =>
-              log.warning(s"drop replayed event with non-matching class: expected = ${implicitly[ClassTag[A]].runtimeClass} actual = ${p.getClass}")
-              Seq.empty[Delivery[A]]
-          }))
+        emitMultiple(out, replayed.events.map(Delivered(_)))
         if (currentSequenceNr == replayed.currentSequenceNr) {
           replaying = false
           emit(out, Recovered)
@@ -113,7 +101,7 @@ private class EventLog[A: ClassTag](persistenceId: String, journalActor: ActorRe
 
       private def onWriteSuccess(written: Written): Unit = {
         writing = false
-        emitMultiple(out, written.events.map(p => Delivered(p.payload.asInstanceOf[A])))
+        emitMultiple(out, written.events.map(Delivered(_)))
         if (completed) completeStage()
       }
 
@@ -121,9 +109,6 @@ private class EventLog[A: ClassTag](persistenceId: String, journalActor: ActorRe
         currentSequenceNr = currentSequenceNr + 1L
         currentSequenceNr
       }
-
-      private def toPersistentRepr(event: Any): PersistentRepr =
-        PersistentRepr(event, nextSequenceNr, persistenceId, PersistentRepr.Undefined, deleted = false, sender = null, PersistentRepr.Undefined)
     }
 }
 

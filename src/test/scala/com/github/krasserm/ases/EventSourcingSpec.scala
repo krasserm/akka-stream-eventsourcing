@@ -47,8 +47,6 @@ object EventSourcingSpec {
 }
 
 class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike with Matchers with ScalaFutures with StreamSpec with KafkaSpec {
-  import DeliveryProtocol._
-  import EventSourcing._
   import EventSourcingSpec._
 
   implicit val pc = PatienceConfig(timeout = Span(5, Seconds), interval = Span(10, Millis))
@@ -59,13 +57,17 @@ class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike w
   val kafkaEventLog: KafkaEventLog =
     new log.KafkaEventLog(host, port)
 
-  def testEventLog[A](stored: Seq[A] = Seq.empty): Flow[A, Delivery[A], NotUsed] =
-    Flow[A].map(Delivered(_)).prepend(Source(stored).map(Delivered(_))).prepend(Source.single(Recovered))
+  def testEventLog[A](emitted: Seq[Emitted[A]] = Seq.empty): Flow[Emitted[A], Delivery[Durable[A]], NotUsed] =
+    Flow[Emitted[A]]
+      .zipWithIndex.map { case (e, i) => e.durable(i) }
+      .map(Delivered(_))
+      .prepend(Source(durables(emitted)).map(Delivered(_)))
+      .prepend(Source.single(Recovered))
 
   "An EventSourcing stage" when {
     "joined with a test event log" must {
       val processor: Flow[Request, Response, NotUsed] =
-        EventSourcing(0, requestHandler, eventHandler).join(testEventLog())
+        EventSourcing(emitterId, 0, requestHandler, eventHandler).join(testEventLog())
 
       "consume commands and produce responses" in {
         val commands = Seq(1, -4, 7).map(Increment)
@@ -83,7 +85,7 @@ class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike w
     }
     "joined with a non-empty test event log" must {
       val processor: Flow[Request, Response, NotUsed] =
-        EventSourcing(0, requestHandler, eventHandler).join(testEventLog(Seq(Identified(Incremented(1)))))
+        EventSourcing(emitterId, 0, requestHandler, eventHandler).join(testEventLog(Seq(Emitted(Incremented(1), emitterId))))
 
       "first recover state and then consume commands and produce responses" in {
         val commands = Seq(-4, 7).map(Increment)
@@ -93,7 +95,7 @@ class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike w
     }
     "joined with an Akka Persistence event log" must {
       def processor(persistenceId: String): Flow[Request, Response, NotUsed] =
-        EventSourcing(0, requestHandler, eventHandler).join(akkaPersistenceEventLog.flow(persistenceId))
+        EventSourcing(emitterId, 0, requestHandler, eventHandler).join(akkaPersistenceEventLog.flow(persistenceId))
 
       "consume commands and produce responses" in {
         val persistenceId = "pid-1"
@@ -104,7 +106,7 @@ class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike w
 
       "first recover state and then consume commands and produce responses" in {
         val persistenceId = "pid-2"
-        Source.single(Identified(Incremented(1))).runWith(akkaPersistenceEventLog.sink(persistenceId)).futureValue
+        Source.single(Emitted(Incremented(1), emitterId)).runWith(akkaPersistenceEventLog.sink(persistenceId)).futureValue
         val commands = Seq(-4, 7).map(Increment)
         val expected = Seq(-3, 4).map(Response)
         Source(commands).via(processor(persistenceId)).runWith(Sink.seq).futureValue should be(expected)
@@ -112,7 +114,7 @@ class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike w
     }
     "joined with a Kafka event log" must {
       def processor(topicPartition: TopicPartition): Flow[Request, Response, NotUsed] =
-        EventSourcing(0, requestHandler, eventHandler).join(kafkaEventLog.flow(topicPartition))
+        EventSourcing(emitterId, 0, requestHandler, eventHandler).join(kafkaEventLog.flow(topicPartition))
 
       "consume commands and produce responses" in {
         val topicPartition = new TopicPartition("p-1", 0)
@@ -123,7 +125,7 @@ class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike w
 
       "first recover state and then consume commands and produce responses" in {
         val topicPartition = new TopicPartition("p-2", 0)
-        Source.single(Identified(Incremented(1))).runWith(kafkaEventLog.sink(topicPartition)).futureValue
+        Source.single(Emitted(Incremented(1), emitterId)).runWith(kafkaEventLog.sink(topicPartition)).futureValue
         val commands = Seq(-4, 7).map(Increment)
         val expected = Seq(-3, 4).map(Response)
         Source(commands).via(processor(topicPartition)).runWith(Sink.seq).futureValue should be(expected)
