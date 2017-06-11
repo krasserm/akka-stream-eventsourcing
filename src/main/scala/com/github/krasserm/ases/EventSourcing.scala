@@ -40,8 +40,8 @@ object EventSourcing {
     (S, E) => S
 
   /**
-    * Request handler. Input is the current state and the current request. Output is either
-    * a result created with [[respond]] or with [[emit]].
+    * Request handler. Input is current state and a request, output is an instruction to emit events
+    * and/or a response:
     *
     *  - [[respond]] creates an immediate response which can be either the response to a ''query''
     *  or the failure response to a ''command'' whose validation failed, for example.
@@ -54,29 +54,29 @@ object EventSourcing {
     * @tparam RES Response type.
     */
   type RequestHandler[S, E, REQ, RES] =
-    (S, REQ) => RequestHandlerResult[S, E, RES]
+    (S, REQ) => Emission[S, E, RES]
 
-  sealed trait RequestHandlerResult[S, E, RES]
+  sealed trait Emission[S, E, RES]
 
   private case class Respond[S, E, RES](response: RES)
-    extends RequestHandlerResult[S, E, RES]
+    extends Emission[S, E, RES]
 
   private case class Emit[S, E, RES](events: Seq[E], responseFactory: S => RES)
-    extends RequestHandlerResult[S, E, RES] {
+    extends Emission[S, E, RES] {
     require(events.nonEmpty, "event sequence must not be empty")
   }
 
   /**
     * Creates a request handler result that contains an immediate response.
     */
-  def respond[S, E, RES](response: RES): RequestHandlerResult[S, E, RES] =
+  def respond[S, E, RES](response: RES): Emission[S, E, RES] =
     Respond(response)
 
   /**
     * Create a request handler result that contains events to be written to an event log and a response
     * factory to be called with the current state after all written events have been applied to it.
     */
-  def emit[S, E, RES](events: Seq[E], responseFactory: S => RES): RequestHandlerResult[S, E, RES] =
+  def emit[S, E, RES](events: Seq[E], responseFactory: S => RES): Emission[S, E, RES] =
     Emit(events, responseFactory)
 
   /**
