@@ -17,10 +17,10 @@
 package com.github.krasserm.ases.log
 
 import akka.actor.ActorSystem
-import akka.persistence.Journal
-import akka.stream.scaladsl.{Flow, Sink, Source}
+import akka.persistence.{Journal, PersistentRepr}
+import akka.stream.scaladsl._
 import akka.{Done, NotUsed}
-import com.github.krasserm.ases.DeliveryProtocol.Delivery
+import com.github.krasserm.ases._
 
 import scala.concurrent.Future
 import scala.reflect.ClassTag
@@ -41,10 +41,9 @@ class AkkaPersistenceEventLog(journalId: String)(implicit system: ActorSystem) {
     * the flow emits events that have been previously written to the journal
     * (recovery phase).
     *
-    * During recovery, events are emitted as [[com.github.krasserm.ases.DeliveryProtocol.Delivered Delivered]]
-    * messages, recovery completion is signaled as [[com.github.krasserm.ases.DeliveryProtocol.Recovered Recovered]]
-    * message, both subtypes of [[com.github.krasserm.ases.DeliveryProtocol.Delivery Delivery]]. After recovery,
-    * events are again emitted as [[com.github.krasserm.ases.DeliveryProtocol.Delivered Delivered]] messages.
+    * During recovery, events are emitted as [[Delivered]] messages, recovery completion
+    * is signaled as [[Recovered]] message, both subtypes of [[Delivery]]. After recovery,
+    * events are again emitted as [[Delivered]] messages.
     *
     * It is the application's responsibility to ensure that there is only a
     * single materialized instance with given `persistenceId` writing to the
@@ -54,21 +53,22 @@ class AkkaPersistenceEventLog(journalId: String)(implicit system: ActorSystem) {
     * @tparam A event type. Only events that are instances of given type are
     *           emitted by the flow.
     */
-  def flow[A: ClassTag](persistenceId: String): Flow[A, Delivery[A], NotUsed] =
-    journal.eventLog[A](persistenceId)
+  def flow[A: ClassTag](persistenceId: String): Flow[Emitted[A], Delivery[Durable[A]], NotUsed] =
+    AkkaPersistenceCodec[A](persistenceId).join(journal.eventLog(persistenceId))
 
   /**
-    * Creates a source that replays events of the event log identified by
-    * `persistenceId`. The source completes when the end of the event log is
-    * reached (i.e. it is not a live source in contrast to the output of
-    * [[flow]]).
+    * Creates a source that replays events of the event log identified by `persistenceId`.
+    * The source completes when the end of the log has been reached.
+    *
+    * During recovery, events are emitted as [[Delivered]] messages, recovery completion
+    * is signaled as [[Recovered]] message, both subtypes of [[Delivery]].
     *
     * @param persistenceId persistence id of the event log.
     * @tparam A event type. Only events that are instances of given type are
     *           emitted by the source.
     */
-  def source[A: ClassTag](persistenceId: String): Source[A, NotUsed] =
-    journal.eventSource[A](persistenceId)
+  def source[A: ClassTag](persistenceId: String): Source[Delivery[Durable[A]], NotUsed] =
+    journal.eventSource(persistenceId).via(AkkaPersistenceCodec.decoder)
 
   /**
     * Creates a sink that writes events to the event log identified by
@@ -76,6 +76,44 @@ class AkkaPersistenceEventLog(journalId: String)(implicit system: ActorSystem) {
     *
     * @param persistenceId persistence id of the event log.
     */
-  def sink[A: ClassTag](persistenceId: String): Sink[A, Future[Done]] =
-    journal.eventSink[A](persistenceId)
+  def sink[A](persistenceId: String): Sink[Emitted[A], Future[Done]] =
+    AkkaPersistenceCodec.encoder(persistenceId).toMat(journal.eventSink(persistenceId))(Keep.right)
+}
+
+/**
+  * Codec for translating [[Emitted]] to [[PersistentRepr]] and [[PersistentRepr]] to [[Durable]].
+  */
+private object AkkaPersistenceCodec {
+  /**
+    * Codec composed of [[encoder]] and [[decoder]].
+    */
+  def apply[A: ClassTag](persistenceId: String): BidiFlow[Emitted[A], PersistentRepr, Delivery[PersistentRepr], Delivery[Durable[A]], NotUsed] =
+    BidiFlow.fromFlows(encoder(persistenceId), decoder)
+
+  /**
+    * Decodes a [[PersistentRepr]] event as [[Durable]]
+    */
+  def decoder[A: ClassTag]: Flow[Delivery[PersistentRepr], Delivery[Durable[A]], NotUsed] =
+    Flow[Delivery[PersistentRepr]].collect {
+      case Delivered(PersistentRepr(Emitted(e: A, emitterId, emissionUuid), sequenceNr)) =>
+        Delivered(Durable(e, emitterId, emissionUuid, sequenceNr))
+      case Recovered =>
+        Recovered
+    }
+
+  /**
+    * Encodes an [[Emitted]] event as [[PersistentRepr]].
+    */
+  def encoder[A](persistenceId: String): Flow[Emitted[A], PersistentRepr, NotUsed] =
+    Flow[Emitted[A]].map(encode(persistenceId))
+
+  private def encode[A](persistenceId: String)(identified: Emitted[A]): PersistentRepr =
+    PersistentRepr(
+      payload = identified,
+      sequenceNr = -1L,
+      persistenceId = persistenceId,
+      writerUuid = PersistentRepr.Undefined,
+      manifest = PersistentRepr.Undefined,
+      deleted = false,
+      sender = null)
 }

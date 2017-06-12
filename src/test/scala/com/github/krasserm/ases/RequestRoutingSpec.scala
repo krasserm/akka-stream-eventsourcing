@@ -53,7 +53,7 @@ class RequestRoutingSpec extends TestKit(ActorSystem("test")) with WordSpecLike 
     new log.AkkaPersistenceEventLog(journalId = "akka.persistence.journal.inmem")
 
   def processor(aggregateId: String): Flow[Request, Response, NotUsed] =
-    EventSourcing(0, requestHandler, eventHandler).join(akkaPersistenceEventLog.flow(aggregateId))
+    EventSourcing(aggregateId, 0, requestHandler, eventHandler).join(akkaPersistenceEventLog.flow(aggregateId))
 
   def router: Flow[Request, Response, NotUsed] =
     Router(_.aggregateId, processor)

@@ -40,18 +40,19 @@ For updating internal state the `EventSourcing` stage uses an event handler:
   type EventHandler[S, E] = (S, E) => S
 ```
 
-Event handler input is current state and a written event, output is updated state. Given definitions of initial state, a request handler and an event handler, an `EventSourcing` stage can be constructed with:
+Event handler input is current state and a written event, output is updated state. Given definitions of emitter id, initial state, a request handler and an event handler, an `EventSourcing` stage can be constructed with:
    
 ```scala
   import akka.stream.scaladsl.BidiFlow
   import com.github.krasserm.ases.EventSourcing
 
+  def emitterId: String  
   def initialState: S
   def requestHandler: RequestHandler[S, E, REQ, RES]
   def eventHandler: EventHandler[S, E]
 
   def eventSourcingStage: BidiFlow[REQ, E, E, RES, _] =
-    EventSourcing(initialState, requestHandler, eventHandler)
+    EventSourcing(emitterId, initialState, requestHandler, eventHandler)
 ```
    
 Event logs are modeled as `Flow[E, E, _]`. This project provides event log implementations that can use [Akka Persistence journals](http://doc.akka.io/docs/akka/2.5.2/scala/persistence.html#storage-plugins) or [Apache Kafka](http://kafka.apache.org/) as storage backends. [Eventuate event logs](http://rbmhtechnology.github.io/eventuate/architecture.html#event-logs) as storage backends will be supported later. The following example uses the Akka Persistence in-memory journal as storage backend:    
@@ -60,9 +61,11 @@ Event logs are modeled as `Flow[E, E, _]`. This project provides event log imple
   import akka.stream.scaladsl.Flow
   import com.github.krasserm.ases.log.AkkaPersistenceEventLog
 
-  val provider = new AkkaPersistenceEventLog(journalId = "akka.persistence.journal.inmem")
+  val provider: AkkaPersistenceEventLog = 
+    new AkkaPersistenceEventLog(journalId = "akka.persistence.journal.inmem")
 
-  def persistenceId: String
+  def persistenceId: String = 
+    emitterId
 
   def eventLog: Flow[E, E, _] =
     provider.flow[E](persistenceId)
@@ -79,7 +82,7 @@ The result is a stateful, event-sourced request processor of type `Flow[REQ, RES
 
 In the same way as `PersistentActor`s in Akka Persistence, request processors provide a consistency boundary around internal state but additionally provide type safety and back-pressure for the whole event sourcing message flow.
 
-The examples presented in this section are a bit simplified for better readability. Take a look at the sources and tests (e.g. [`EventSourcingSpec`](https://github.com/krasserm/akka-stream-eventsourcing/blob/master/src/test/scala/com/github/krasserm/ases/EventSourcingSpec.scala)) for further details.
+The examples presented in this section are a bit simplified for better readability. Take a look at section *Event logging protocols* and the tests (e.g. [`EventSourcingSpec`](https://github.com/krasserm/akka-stream-eventsourcing/blob/master/src/test/scala/com/github/krasserm/ases/EventSourcingSpec.scala)) for further details.
 
 ## Dynamic request processor loading
 
@@ -94,8 +97,11 @@ This can be achieved with a [`Router`](https://github.com/krasserm/akka-stream-e
     def aggregateId(a: A): String
   }
 
+  def eventSourcingStage(aggregateId: String): BidiFlow[REQ, E, E, RES, _] =
+    EventSourcing(aggregateId, initialState, requestHandler, eventHandler)
+
   def requestProcessor(aggregateId: String): Flow[REQ, RES, _] =
-    eventSourcingStage.join(provider.flow[E](persistenceId))
+    eventSourcingStage(aggregateId).join(provider.flow[E](aggregateId))
 
   def requestRouter(implicit agg: Aggregate[REQ]): Flow[REQ, RES, _] = {
     Router(req => agg.aggregateId(req), (aggregateId: String) => requestProcessor(aggregateId))
@@ -108,7 +114,7 @@ A running example is in [`RequestRoutingSpec`](https://github.com/krasserm/akka-
 
 In contrast to `PersistentActor`s, `EventSourcing` stages can form a group by sharing an event log. Within a group, events emitted by one member can be consumed by all members in the group i.e. stages communicate via broadcast using the ordering guarantees of the underlying event log implementation. This feature can be used to implement event-sourced microservices that collaborate via events over a shared event log. 
 
-The following example defines a `requestProcessor` that uses an Apache Kafka topic partition as shared event log. Multiple materializations of `requestProcessor` form a request processor group whose members collaborate over the shared `kafkaTopicPartition`. All members consume events in the same order as a topic partition provides total ordering:
+The following example defines a `requestProcessor` method that creates request processors that use a Kafka topic partition as shared event log. Request processors created with this method form a group whose members collaborate over the shared `kafkaTopicPartition`. All members consume events in the same order as a topic partition provides total ordering:
 
 ```scala
   import com.github.krasserm.ases.log.KafkaEventLog
@@ -120,31 +126,55 @@ The following example defines a `requestProcessor` that uses an Apache Kafka top
 
   val provider = new KafkaEventLog(kafkaHost, kafkaPort)
 
-  def requestProcessor: Flow[REQ, RES, _] =
-    EventSourcing(initialState, requestHandler, eventHandler)
+  def requestProcessor(emitterId: String): Flow[REQ, RES, _] =
+    EventSourcing(emitterId, initialState, requestHandler, eventHandler)
       .join(provider.flow(kafkaTopicPartition))
+  
+  // A group of request processors    
+  val requestProcessor1 = requestProcessor("processor1")
+  val requestProcessor2 = requestProcessor("processor2")
+  // ...
 ```
 
-Materializations are not shown here but you can find a running example in [`EventCollaborationSpec`](https://github.com/krasserm/akka-stream-eventsourcing/blob/master/src/test/scala/com/github/krasserm/ases/EventCollaborationSpec.scala) (a replicated event-sourced counter). Collaboration of request processors is comparable to collaboration of `EventsourcedActor`s in [Eventuate](http://rbmhtechnology.github.io/eventuate/) (see [event collaboration](http://rbmhtechnology.github.io/eventuate/architecture.html#event-collaboration) for details).
+You can find a running example in [`EventCollaborationSpec`](https://github.com/krasserm/akka-stream-eventsourcing/blob/master/src/test/scala/com/github/krasserm/ases/EventCollaborationSpec.scala) (a replicated event-sourced counter). Collaboration of request processors is comparable to collaboration of `EventsourcedActor`s in [Eventuate](http://rbmhtechnology.github.io/eventuate/) (see [event collaboration](http://rbmhtechnology.github.io/eventuate/architecture.html#event-collaboration) for details).
 
 ## Handler switching
 
 Applications can switch request and event handlers as a function of current state by defining request and event handler *providers*: 
 
 ```scala
+  def emitterId: String
   def initialState: S
   def requestHandlerProvider: S => RequestHandler[S, E, REQ, RES]
   def eventHandlerProvider: S => EventHandler[S, E]
 
   def eventSourcingStage: BidiFlow[REQ, E, E, RES, _] =
-    EventSourcing(initialState, requestHandlerProvider, eventHandlerProvider)
+    EventSourcing(emitterId, initialState, requestHandlerProvider, eventHandlerProvider)
 ```
    
 A request handler provider is called with current state for each request, an event handler provider is called with current state for each written event. This feature will be used later to implement a state machine DSL on top of the current handler API.
 
 ## Event logging protocols
  
-The examples so far modeled event logs as `Flow[E, E, _]` which is not sufficient for real-world use cases. In order to support atomic batch writes, for example, an event log should have a signature like `Flow[AtomicBatch[E], E, _]`. An `EventSourcing` stage also needs to know when an event log transitions from event replay to live event delivery. This is currently implemented with a [`DeliveryProtocol`](https://github.com/krasserm/akka-stream-eventsourcing/blob/master/src/main/scala/com/github/krasserm/ases/DeliveryProtocol.scala) which requires event logs to be of type `Flow[E, Delivery[E], _]`. The currently implemented event logging protocols are preliminary and will change in the future. 
+The examples so far modeled event logs as `Flow[E, E, _]` and `EventSourcing` stages as `BidiFlow[REQ, E, E, RES, _]` where `E` is the type of a domain event. This is not sufficient for real-world use cases. Further event metadata are required: 
+
+- Events emitted by an `EventSourcing` stage must contain the id of the emitting stage (`emitterId`). This is needed, for example, by consumers on the query side of a CQRS application to distinguish emitters when consuming events from an aggregated or shared event log.
+- Events emitted by an event log must additionally contain the sequence number of the written event. Sequence numbers are required to track event processing progress, for example.
+- An event log must also signal to an `EventSourcing` stage when event replay has been completed. Only after successful recovery, an `EventSourcing` stage is allowed to signal demand for new requests to upstream producers.
+
+For these reasons, the current implementation uses 
+
+```scala
+Flow[Emitted[E], Delivery[Durable[E]], _]
+```
+
+as type for event logs and 
+
+```scala
+BidiFlow[REQ, Emitted[E], Delivery[Durable[E]], RES, _]
+```
+
+as type for `EventSourcing` stages. `Emitted`, `Durable` and `Delivery` are defined in [`Protocol.scala`](https://github.com/krasserm/akka-stream-eventsourcing/blob/master/src/main/scala/com/github/krasserm/ases/Protocol.scala). These protocol definitions are still preliminary and expected to change. For example, an extension to `Emitted` could support the emission of event batches for atomic batch writes.
  
 ## Project status
 

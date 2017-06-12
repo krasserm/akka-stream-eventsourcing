@@ -20,7 +20,6 @@ import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.stream.scaladsl.{Flow, Sink}
 import akka.testkit.TestKit
-import com.github.krasserm.ases.EventSourcing.Identified
 import com.github.krasserm.ases.log.{KafkaEventLog, KafkaSpec}
 import org.apache.kafka.common.TopicPartition
 import org.scalatest.concurrent.ScalaFutures
@@ -34,18 +33,21 @@ class EventCollaborationSpec extends TestKit(ActorSystem("test")) with WordSpecL
 
   implicit val pc = PatienceConfig(timeout = Span(5, Seconds), interval = Span(10, Millis))
 
+  val emitterId1 = "processor1"
+  val emitterId2 = "processor2"
+
   val kafkaEventLog: KafkaEventLog =
     new log.KafkaEventLog(host, port)
 
-  def processor(topicPartition: TopicPartition): Flow[Request, Response, NotUsed] =
-    EventSourcing(0, requestHandler, eventHandler).join(kafkaEventLog.flow(topicPartition))
+  def processor(emitterId: String, topicPartition: TopicPartition): Flow[Request, Response, NotUsed] =
+    EventSourcing(emitterId, 0, requestHandler, eventHandler).join(kafkaEventLog.flow(topicPartition))
 
   "A group of EventSourcing stages" when {
     "joined with a shared event log" can {
       "collaborate via publish-subscribe" in {
         val topicPartition = new TopicPartition("p-1", 0)    // shared topic partition
-        val (pub1, sub1) = probes(processor(topicPartition)) // processor 1
-        val (pub2, sub2) = probes(processor(topicPartition)) // processor 2
+        val (pub1, sub1) = probes(processor(emitterId1, topicPartition)) // processor 1
+        val (pub2, sub2) = probes(processor(emitterId2, topicPartition)) // processor 2
 
         pub1.sendNext(Increment(3))
         // Both processors receive event but
@@ -58,8 +60,12 @@ class EventCollaborationSpec extends TestKit(ActorSystem("test")) with WordSpecL
         sub2.requestNext(Response(-1))
 
         // consume and verify events emitted by both processors
-        kafkaEventLog.source[Identified[Incremented]](topicPartition).runWith(Sink.seq)
-          .futureValue.map(_.event) should be(Seq(Incremented(3), Incremented(-4)))
+        kafkaEventLog.source[Incremented](topicPartition).via(log.replayed).map {
+          case Durable(event, eid, _, sequenceNr) => (event, eid, sequenceNr)
+        }.runWith(Sink.seq).futureValue should be(Seq(
+          (Incremented(3), emitterId1, 0L),
+          (Incremented(-4), emitterId2, 1L)
+        ))
       }
     }
   }

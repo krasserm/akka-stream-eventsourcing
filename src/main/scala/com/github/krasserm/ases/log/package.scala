@@ -18,7 +18,6 @@ package com.github.krasserm.ases
 
 import akka.NotUsed
 import akka.stream.scaladsl.Flow
-import com.github.krasserm.ases.DeliveryProtocol.{Delivered, Delivery, Recovered}
 
 package object log {
   def replayed[A]: Flow[Delivery[A], A, NotUsed] =

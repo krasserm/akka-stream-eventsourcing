@@ -16,13 +16,10 @@
 
 package com.github.krasserm.ases
 
-import java.util.UUID
-
 import akka.NotUsed
 import akka.stream.scaladsl.BidiFlow
 import akka.stream.stage.{GraphStage, GraphStageLogic, InHandler, OutHandler}
 import akka.stream.{Attributes, BidiShape, Inlet, Outlet}
-import com.github.krasserm.ases.DeliveryProtocol._
 import com.github.krasserm.ases.EventSourcing._
 
 import scala.collection.immutable.Seq
@@ -80,23 +77,13 @@ object EventSourcing {
     Emit(events, responseFactory)
 
   /**
-    * Used by [[EventSourcing]] to correlate emitted events with input events (preliminary solution).
-    */
-  case class Identified[A](id: String, event: A)
-
-  object Identified {
-    def apply[A](event: A): Identified[A] =
-      Identified(UUID.randomUUID().toString, event)
-  }
-
-  /**
     * Creates a bidi-flow that implements the driver for event sourcing logic defined by `requestHandler`
     * `eventHandler`. The created event sourcing stage should be joined with an event log (i.e. a flow)
     * for writing emitted events. Written events are delivered from the joined event log back to the stage:
     *
     *  - After materialization, the stage's state is recovered with replayed events delivered by the joined
     *    event log.
-    *  - On recovery completion (see [[DeliveryProtocol]]) the stage is ready to accept requests if there is
+    *  - On recovery completion (see [[Delivery]]) the stage is ready to accept requests if there is
     *    downstream response and event demand.
     *  - On receiving a command it calls the request handler and emits the returned events. The emitted events
     *    are sent downstream to the joined event log.
@@ -108,6 +95,7 @@ object EventSourcing {
     *  - After response emission, the stage is ready to accept the next request if there is downstream response
     *    and event demand.
     *
+    * @param emitterId Identifier used for [[Emitted.emitterId]].
     * @param initial Initial state.
     * @param requestHandler The stage's request handler.
     * @param eventHandler The stage's event handler.
@@ -117,10 +105,11 @@ object EventSourcing {
     * @tparam RES Response type.
     */
   def apply[S, E, REQ, RES](
+      emitterId: String,
       initial: S,
       requestHandler: RequestHandler[S, E, REQ, RES],
-      eventHandler: EventHandler[S, E]): BidiFlow[REQ, Identified[E], Delivery[Identified[E]], RES, NotUsed] =
-    BidiFlow.fromGraph(new EventSourcing[S, E, REQ, RES](initial, _ => requestHandler, _ => eventHandler))
+      eventHandler: EventHandler[S, E]): BidiFlow[REQ, Emitted[E], Delivery[Durable[E]], RES, NotUsed] =
+    BidiFlow.fromGraph(new EventSourcing[S, E, REQ, RES](emitterId, initial, _ => requestHandler, _ => eventHandler))
 
   /**
     * Creates a bidi-flow that implements the driver for event sourcing logic returned by `requestHandlerProvider`
@@ -132,7 +121,7 @@ object EventSourcing {
     *
     *  - After materialization, the stage's state is recovered with replayed events delivered by the joined
     *    event log.
-    *  - On recovery completion (see [[DeliveryProtocol]]) the stage is ready to accept requests if there is
+    *  - On recovery completion (see [[Delivery]]) the stage is ready to accept requests if there is
     *    downstream response and event demand.
     *  - On receiving a command it calls the request handler and emits the returned events. The emitted events
     *    are sent downstream to the joined event log.
@@ -144,6 +133,7 @@ object EventSourcing {
     *  - After response emission, the stage is ready to accept the next request if there is downstream response
     *    and event demand.
     *
+    * @param emitterId Identifier used for [[Emitted.emitterId]].
     * @param initial Initial state.
     * @param requestHandlerProvider The stage's request handler provider.
     * @param eventHandlerProvider The stage's event handler provider.
@@ -153,25 +143,27 @@ object EventSourcing {
     * @tparam RES Response type.
     */
   def apply[S, E, REQ, RES](
+      emitterId: String,
       initial: S,
       requestHandlerProvider: S => RequestHandler[S, E, REQ, RES],
-      eventHandlerProvider: S => EventHandler[S, E]): BidiFlow[REQ, Identified[E], Delivery[Identified[E]], RES, NotUsed] =
-    BidiFlow.fromGraph(new EventSourcing(initial, requestHandlerProvider, eventHandlerProvider))
+      eventHandlerProvider: S => EventHandler[S, E]): BidiFlow[REQ, Emitted[E], Delivery[Durable[E]], RES, NotUsed] =
+    BidiFlow.fromGraph(new EventSourcing(emitterId, initial, requestHandlerProvider, eventHandlerProvider))
 }
 
 private class EventSourcing[S, E, REQ, RES](
+    emitterId: String,
     initial: S,
     requestHandlerProvider: S => RequestHandler[S, E, REQ, RES],
     eventHandlerProvider: S => EventHandler[S, E])
-  extends GraphStage[BidiShape[REQ, Identified[E], Delivery[Identified[E]], RES]] {
+  extends GraphStage[BidiShape[REQ, Emitted[E], Delivery[Durable[E]], RES]] {
 
-  private case class Roundtrip(eventIds: Set[String], responseFactory: S => RES) {
-    def delivered(eventId: String): Roundtrip = copy(eventIds - eventId)
+  private case class Roundtrip(emissionUuids: Set[String], responseFactory: S => RES) {
+    def delivered(emissionUuid: String): Roundtrip = copy(emissionUuids - emissionUuid)
   }
 
   val ci = Inlet[REQ]("EventSourcing.requestIn")
-  val eo = Outlet[Identified[E]]("EventSourcing.eventOut")
-  val ei = Inlet[Delivery[Identified[E]]]("EventSourcing.eventIn")
+  val eo = Outlet[Emitted[E]]("EventSourcing.eventOut")
+  val ei = Inlet[Delivery[Durable[E]]]("EventSourcing.eventIn")
   val ro = Outlet[RES]("EventSourcing.responseOut")
 
   val shape = BidiShape.of(ci, eo, ei, ro)
@@ -190,9 +182,9 @@ private class EventSourcing[S, E, REQ, RES](
               push(ro, response)
               tryPullCi()
             case Emit(events, responseFactory) =>
-              val identified = events.map(Identified(_))
-              roundtrip = Some(Roundtrip(identified.map(_.id)(collection.breakOut), responseFactory))
-              emitMultiple(eo, identified)
+              val emitted = events.map(Emitted(_, emitterId))
+              roundtrip = Some(Roundtrip(emitted.map(_.emissionUuid)(collection.breakOut), responseFactory))
+              emitMultiple(eo, emitted)
           }
         }
 
@@ -206,10 +198,10 @@ private class EventSourcing[S, E, REQ, RES](
             case Recovered =>
               recovered = true
               tryPullCi()
-            case Delivered(identified) =>
-              state = eventHandlerProvider(state)(state, identified.event)
-              roundtrip = roundtrip.map(_.delivered(identified.id)).flatMap {
-                case r if r.eventIds.isEmpty =>
+            case Delivered(durable) =>
+              state = eventHandlerProvider(state)(state, durable.event)
+              roundtrip = roundtrip.map(_.delivered(durable.emissionUuid)).flatMap {
+                case r if r.emissionUuids.isEmpty =>
                   push(ro, r.responseFactory(state))
                   if (requestUpstreamFinished) completeStage() else tryPullCi()
                   None
