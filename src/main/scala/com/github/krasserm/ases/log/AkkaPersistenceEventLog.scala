@@ -53,8 +53,8 @@ class AkkaPersistenceEventLog(journalId: String)(implicit system: ActorSystem) {
     * @tparam A event type. Only events that are instances of given type are
     *           emitted by the flow.
     */
-  def flow[A: ClassTag](persistenceId: String): Flow[Emitted[A], Delivery[Durable[A]], NotUsed] =
-    AkkaPersistenceCodec[A](persistenceId).join(journal.eventLog(persistenceId))
+  def flow[A: ClassTag](persistenceId: String, fromSequenceNr: Long = 1L): Flow[Emitted[A], Delivery[Durable[A]], NotUsed] =
+    AkkaPersistenceCodec[A](persistenceId).join(journal.eventLog(persistenceId, fromSequenceNr))
 
   /**
     * Creates a source that replays events of the event log identified by `persistenceId`.
@@ -67,8 +67,8 @@ class AkkaPersistenceEventLog(journalId: String)(implicit system: ActorSystem) {
     * @tparam A event type. Only events that are instances of given type are
     *           emitted by the source.
     */
-  def source[A: ClassTag](persistenceId: String): Source[Delivery[Durable[A]], NotUsed] =
-    journal.eventSource(persistenceId).via(AkkaPersistenceCodec.decoder)
+  def source[A: ClassTag](persistenceId: String, fromSequenceNr: Long = 1L): Source[Delivery[Durable[A]], NotUsed] =
+    journal.eventSource(persistenceId, fromSequenceNr).via(AkkaPersistenceCodec.decoder)
 
   /**
     * Creates a sink that writes events to the event log identified by
@@ -107,9 +107,9 @@ private object AkkaPersistenceCodec {
   def encoder[A](persistenceId: String): Flow[Emitted[A], PersistentRepr, NotUsed] =
     Flow[Emitted[A]].map(encode(persistenceId))
 
-  private def encode[A](persistenceId: String)(identified: Emitted[A]): PersistentRepr =
+  private def encode[A](persistenceId: String)(emitted: Emitted[A]): PersistentRepr =
     PersistentRepr(
-      payload = identified,
+      payload = emitted,
       sequenceNr = -1L,
       persistenceId = persistenceId,
       writerUuid = PersistentRepr.Undefined,

@@ -35,17 +35,19 @@ class Journal(journalId: String)(implicit system: ActorSystem) {
   private val extension = Persistence(system)
   private val journalActor = extension.journalFor(journalId)
 
-  def eventLog(persistenceId: String): Flow[PersistentRepr, Delivery[PersistentRepr], NotUsed] =
-    Flow[PersistentRepr].batch(10, Vector(_))(_ :+ _).via(Flow.fromGraph(new EventLog(persistenceId, journalActor)))
+  def eventLog(persistenceId: String, fromSequenceNr: Long): Flow[PersistentRepr, Delivery[PersistentRepr], NotUsed] =
+    Flow[PersistentRepr].batch(10, Vector(_))(_ :+ _).via(Flow.fromGraph(new EventLog(persistenceId, fromSequenceNr, journalActor)))
 
-  def eventSource(persistenceId: String): Source[Delivery[PersistentRepr], NotUsed] =
-    Source.single(Seq.empty).via(Flow.fromGraph(new EventLog(persistenceId, journalActor)))
+  def eventSource(persistenceId: String, fromSequenceNr: Long): Source[Delivery[PersistentRepr], NotUsed] =
+    Source.single(Seq.empty).via(Flow.fromGraph(new EventLog(persistenceId, fromSequenceNr, journalActor)))
 
   def eventSink(persistenceId: String): Sink[PersistentRepr, Future[Done]] =
-    eventLog(persistenceId).toMat(Sink.ignore)(Keep.right)
+    eventLog(persistenceId, Long.MaxValue /* only recover sequence number */).toMat(Sink.ignore)(Keep.right)
 }
 
-private class EventLog(persistenceId: String, journalActor: ActorRef)(implicit factory: ActorRefFactory) extends GraphStage[FlowShape[Seq[PersistentRepr], Delivery[PersistentRepr]]] {
+private class EventLog(persistenceId: String, fromSequenceNr: Long, journalActor: ActorRef)(implicit factory: ActorRefFactory)
+  extends GraphStage[FlowShape[Seq[PersistentRepr], Delivery[PersistentRepr]]] {
+
   import EventReplayer.Replayed
   import EventWriter.Written
 
@@ -66,7 +68,7 @@ private class EventLog(persistenceId: String, journalActor: ActorRef)(implicit f
       private var completed = false
       private var writing = false
       private var replaying = true
-      private var currentSequenceNr: Long = 0L
+      private var currentSequenceNr: Long = math.max(fromSequenceNr - 1L, 0L)
 
       setHandler(in, new InHandler {
         override def onPush(): Unit = {
@@ -93,7 +95,10 @@ private class EventLog(persistenceId: String, journalActor: ActorRef)(implicit f
       private def onReplaySuccess(replayed: Replayed): Unit = {
         currentSequenceNr = replayed.lastSequenceNr
         emitMultiple(out, replayed.events.map(Delivered(_)))
-        if (currentSequenceNr == replayed.currentSequenceNr) {
+        if (currentSequenceNr >= replayed.currentSequenceNr) {
+          // Needed if highest sequence number in journal is
+          // less than (fromSequenceNr - 1L).
+          currentSequenceNr = replayed.currentSequenceNr
           replaying = false
           emit(out, Recovered)
         }
