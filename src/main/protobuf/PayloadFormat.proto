@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+option java_package = "com.github.krasserm.ases.serializer";
+option optimize_for = SPEED;
+
+message PayloadFormat {
+  int32 serializerId = 1;
+  bytes payload = 2;
+  string payloadManifest = 3;
+  bool isStringManifest = 4;
+}
