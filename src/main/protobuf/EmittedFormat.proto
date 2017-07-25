@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+option java_package = "com.github.krasserm.ases.serializer";
+option optimize_for = SPEED;
+
+import "PayloadFormat.proto";
+
+message EmittedFormat {
+  PayloadFormat event = 1;
+  string emitterId = 2;
+  string emissionUuid = 3;
+}

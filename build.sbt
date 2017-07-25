@@ -1,4 +1,5 @@
 import de.heikoseeberger.sbtheader.license.Apache2_0
+import sbtprotobuf.ProtobufPlugin
 
 lazy val commonSettings = Seq(
   organization := "com.github.krasserm",
@@ -18,6 +19,11 @@ lazy val headerSettings = Seq(headers := Map(
   "scala" -> header,
   "java" -> header
 ))
+
+lazy val protocSettings: Seq[Setting[_]] = ProtobufPlugin.protobufSettings ++ Seq(
+  version in ProtobufPlugin.protobufConfig := Version.Protobuf,
+  ProtobufPlugin.runProtoc in ProtobufPlugin.protobufConfig := (args => com.github.os72.protocjar.Protoc.runProtoc("-v330" +: args.toArray))
+)
 
 lazy val dependencies = Seq(
   "com.typesafe.akka" %% "akka-persistence"         % Version.Akka ,
@@ -40,4 +46,5 @@ lazy val root = (project in file("."))
   .settings(commonSettings: _*)
   .settings(testSettings: _*)
   .settings(headerSettings: _*)
+  .settings(protocSettings: _*)
   .settings(libraryDependencies ++= dependencies)
