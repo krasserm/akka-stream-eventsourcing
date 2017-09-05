@@ -189,7 +189,8 @@ private class EventSourcing[S, E, REQ, RES](
         }
 
         override def onUpstreamFinish(): Unit =
-          requestUpstreamFinished = true
+          if (roundtrip.isEmpty) super.onUpstreamFinish()
+          else requestUpstreamFinished = true
       })
 
       setHandler(ei, new InHandler {
@@ -230,6 +231,6 @@ private class EventSourcing[S, E, REQ, RES](
         if (!requestUpstreamFinished) pull(ei)
 
       private def tryPullCi(): Unit =
-        if (isAvailable(eo) && isAvailable(ro) && !hasBeenPulled(ci) && roundtrip.isEmpty && !requestUpstreamFinished) pull(ci)
+        if (!requestUpstreamFinished && recovered && roundtrip.isEmpty && isAvailable(eo) && isAvailable(ro) && !hasBeenPulled(ci)) pull(ci)
     }
 }

@@ -18,12 +18,11 @@ package com.github.krasserm.ases
 
 import akka.NotUsed
 import akka.actor.ActorSystem
-import akka.stream.scaladsl.Flow
+import akka.stream.scaladsl.{Flow, Sink, Source}
 import akka.testkit.TestKit
 import com.github.krasserm.ases.log.AkkaPersistenceEventLog
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.{Matchers, WordSpecLike}
-
 import scala.collection.immutable.Seq
 
 object RequestRoutingSpec {
@@ -77,6 +76,43 @@ class RequestRoutingSpec extends TestKit(ActorSystem("test")) with WordSpecLike 
 
         pub.sendNext(Increment(aggregateId2, -4))
         sub.requestNext(Response(aggregateId2, -3))
+      }
+    }
+  }
+
+  "A request router" when {
+    "configured to route based on aggregate id" must {
+      "handle single command request using Source.single" in {
+        val request = Increment("a3", 3)
+        val expected = Response("a3", 3)
+        Source.single(request)
+          .via(router)
+          .runWith(Sink.head)
+          .futureValue should be(expected)
+      }
+    }
+  }
+
+  "A request router" when {
+    "configured to route based on aggregate id" must {
+      "handle single command request using Source.apply(Seq)" in {
+        val request = Increment("a4", 3)
+        val expected = Response("a4", 3)
+        Source(Seq(request))
+          .via(router)
+          .runWith(Sink.head)
+        .futureValue should be(expected)
+      }
+    }
+  }
+
+  "A request router" when {
+    "configured to route based on aggregate id" must {
+      "handle multiple command requests" in {
+        Source(Seq(Increment("a5", 1), Increment("a5", 2), Increment("a5", 3)))
+          .via(router)
+          .runWith(Sink.seq)
+          .futureValue should be(Seq(Response("a5", 1), Response("a5", 3), Response("a5", 6)))
       }
     }
   }
