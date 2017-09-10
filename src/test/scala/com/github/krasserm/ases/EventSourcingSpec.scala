@@ -32,30 +32,32 @@ object EventSourcingSpec {
   import EventSourcing._
 
   sealed trait Request
-  sealed trait Event {
-    def delta: Int
-  }
-  case object GetState extends Request                      // Query
-  case class Increment(delta: Int) extends Request          // Command
-  case class ClearIfEqualTo(value: Int) extends Request     // Command
-  case class Incremented(delta: Int) extends Event          // Event
-  case class Cleared(value: Int) extends Event {            // Event
-    override def delta = -value
-  }
+  sealed trait Event
+
+  case object GetState extends Request
+  case class Increment(delta: Int) extends Request
+  case class ClearIfEqualTo(value: Int) extends Request
   case class Response(state: Int)
 
+  case class Incremented(delta: Int) extends Event
+  case object Cleared extends Event
+
   val requestHandler: RequestHandler[Int, Event, Request, Response] = {
-    case (s, req @ GetState)      =>
+    case (s, req @ GetState) =>
       respond(Response(s))
-    case (s, req @ Increment(d))  =>
+    case (s, req @ Increment(d)) =>
       emit(Seq(Incremented(d)), Response)
-    case (s, req @ ClearIfEqualTo(v))    =>
-      if (s == v) emit(Seq(Cleared(v)), Response)
+    case (s, req @ ClearIfEqualTo(v)) =>
+      if (s == v) emit(Seq(Cleared), Response)
       else respond(Response(s))
   }
 
-  val eventHandler: EventHandler[Int, Event] =
-    (s, e) => s + e.delta
+  val eventHandler: EventHandler[Int, Event] = {
+    case (s, Incremented(delta)) =>
+      s + delta
+    case (s, Cleared) =>
+      0
+  }
 }
 
 class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike with Matchers with ScalaFutures with StreamSpec with KafkaSpec {
@@ -73,8 +75,8 @@ class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike w
     Flow[Emitted[A]]
       .zipWithIndex.map { case (e, i) => e.durable(i) }
       .map(Delivered(_))
-      .prepend(Source(durables(emitted)).map(Delivered(_)))
       .prepend(Source.single(Recovered))
+      .prepend(Source(durables(emitted)).map(Delivered(_)))
 
   "An EventSourcing stage" when {
     "joined with a test event log" must {
@@ -96,13 +98,29 @@ class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike w
       }
     }
     "joined with a non-empty test event log" must {
-      val processor: Flow[Request, Response, NotUsed] =
-        EventSourcing(emitterId, 0, requestHandler, eventHandler).join(testEventLog(Seq(Emitted(Incremented(1), emitterId))))
+      def processor(replay: Seq[Emitted[Incremented]]): Flow[Request, Response, NotUsed] =
+        EventSourcing(emitterId, 0, requestHandler, eventHandler).join(testEventLog(replay))
 
       "first recover state and then consume commands and produce responses" in {
         val commands = Seq(-4, 7).map(Increment)
         val expected = Seq(-3, 4).map(Response)
-        Source(commands).via(processor).runWith(Sink.seq).futureValue should be(expected)
+        Source(commands).via(processor(Seq(Emitted(Incremented(1), emitterId)))).runWith(Sink.seq).futureValue should be(expected)
+      }
+      "first recover state and then consume state-dependent command with correct state" in {
+        Source.single(ClearIfEqualTo(5)).via(processor(Seq(Emitted(Incremented(5), emitterId))))
+          .runWith(Sink.seq).futureValue should be(Seq(Response(0)))
+      }
+      "first recover state and then consume command followed by state dependent command with correct state" in {
+        Source(Seq(Increment(0), ClearIfEqualTo(5))).via(processor(Seq(Emitted(Incremented(5), emitterId))))
+          .runWith(Sink.seq).futureValue should be(Seq(Response(5), Response(0)))
+      }
+      "first recover state and then consume command and produce response" in {
+        Source.single(Increment(2)).via(processor(Seq(Emitted(Incremented(1), emitterId))))
+          .runWith(Sink.seq).futureValue should be(Seq(Response(3)))
+      }
+      "first recover state and then consume query and produce response" in {
+        Source.single(GetState).via(processor(Seq(Emitted(Incremented(1), emitterId))))
+          .runWith(Sink.seq).futureValue should be(Seq(Response(1)))
       }
     }
     "joined with an Akka Persistence event log" must {
@@ -115,7 +133,6 @@ class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike w
         val expected = Seq(1, -3, 4).map(Response)
         Source(commands).via(processor(persistenceId)).runWith(Sink.seq).futureValue should be(expected)
       }
-
       "first recover state and then consume commands and produce responses" in {
         val persistenceId = "pid-2"
         Source.single(Emitted(Incremented(1), emitterId)).runWith(akkaPersistenceEventLog.sink(persistenceId)).futureValue
@@ -123,26 +140,22 @@ class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike w
         val expected = Seq(-3, 4).map(Response)
         Source(commands).via(processor(persistenceId)).runWith(Sink.seq).futureValue should be(expected)
       }
-
-      "first recover state and then consume state dependent command with correct state" in {
+      "first recover state and then consume state-dependent command with correct state" in {
         val persistenceId = "pid-3"
         Source.single(Emitted(Incremented(5), emitterId)).runWith(akkaPersistenceEventLog.sink(persistenceId)).futureValue
         Source.single(ClearIfEqualTo(5)).via(processor(persistenceId)).runWith(Sink.seq).futureValue should be(Seq(Response(0)))
       }
-
-      "first recover state and then consume event emitting command followed by state dependent command with correct state" in {
+      "first recover state and then consume command followed by state dependent command with correct state" in {
         val persistenceId = "pid-4"
         Source.single(Emitted(Incremented(5), emitterId)).runWith(akkaPersistenceEventLog.sink(persistenceId)).futureValue
         Source(Seq(Increment(0), ClearIfEqualTo(5))).via(processor(persistenceId)).runWith(Sink.seq).futureValue should be(Seq(Response(5), Response(0)))
       }
-
-      "first recover state and then consume event emitting command and produce response" in {
+      "first recover state and then consume command and produce response" in {
         val persistenceId = "pid-5"
         Source.single(Emitted(Incremented(1), emitterId)).runWith(akkaPersistenceEventLog.sink(persistenceId)).futureValue
         Source.single(Increment(2)).via(processor(persistenceId)).runWith(Sink.seq).futureValue should be(Seq(Response(3)))
       }
-
-      "first recover state and then consume non event emitting command and produce response" in {
+      "first recover state and then consume query and produce response" in {
         val persistenceId = "pid-6"
         Source.single(Emitted(Incremented(1), emitterId)).runWith(akkaPersistenceEventLog.sink(persistenceId)).futureValue
         Source.single(GetState).via(processor(persistenceId)).runWith(Sink.seq).futureValue should be(Seq(Response(1)))
@@ -158,13 +171,32 @@ class EventSourcingSpec extends TestKit(ActorSystem("test")) with WordSpecLike w
         val expected = Seq(1, -3, 4).map(Response)
         Source(commands).via(processor(topicPartition)).runWith(Sink.seq).futureValue should be(expected)
       }
-
       "first recover state and then consume commands and produce responses" in {
         val topicPartition = new TopicPartition("p-2", 0)
         Source.single(Emitted(Incremented(1), emitterId)).runWith(kafkaEventLog.sink(topicPartition)).futureValue
         val commands = Seq(-4, 7).map(Increment)
         val expected = Seq(-3, 4).map(Response)
         Source(commands).via(processor(topicPartition)).runWith(Sink.seq).futureValue should be(expected)
+      }
+      "first recover state and then consume state-dependent command with correct state" in {
+        val topicPartition = new TopicPartition("p-3", 0)
+        Source.single(Emitted(Incremented(5), emitterId)).runWith(kafkaEventLog.sink(topicPartition)).futureValue
+        Source.single(ClearIfEqualTo(5)).via(processor(topicPartition)).runWith(Sink.seq).futureValue should be(Seq(Response(0)))
+      }
+      "first recover state and then consume command followed by state dependent command with correct state" in {
+        val topicPartition = new TopicPartition("p-4", 0)
+        Source.single(Emitted(Incremented(5), emitterId)).runWith(kafkaEventLog.sink(topicPartition)).futureValue
+        Source(Seq(Increment(0), ClearIfEqualTo(5))).via(processor(topicPartition)).runWith(Sink.seq).futureValue should be(Seq(Response(5), Response(0)))
+      }
+      "first recover state and then consume command and produce response" in {
+        val topicPartition = new TopicPartition("p-5", 0)
+        Source.single(Emitted(Incremented(1), emitterId)).runWith(kafkaEventLog.sink(topicPartition)).futureValue
+        Source.single(Increment(2)).via(processor(topicPartition)).runWith(Sink.seq).futureValue should be(Seq(Response(3)))
+      }
+      "first recover state and then consume query and produce response" in {
+        val topicPartition = new TopicPartition("p-6", 0)
+        Source.single(Emitted(Incremented(1), emitterId)).runWith(kafkaEventLog.sink(topicPartition)).futureValue
+        Source.single(GetState).via(processor(topicPartition)).runWith(Sink.seq).futureValue should be(Seq(Response(1)))
       }
     }
   }
