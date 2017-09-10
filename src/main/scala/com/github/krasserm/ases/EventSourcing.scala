@@ -161,12 +161,12 @@ private class EventSourcing[S, E, REQ, RES](
     def delivered(emissionUuid: String): Roundtrip = copy(emissionUuids - emissionUuid)
   }
 
-  val ci = Inlet[REQ]("EventSourcing.requestIn")
+  val ri = Inlet[REQ]("EventSourcing.requestIn")
   val eo = Outlet[Emitted[E]]("EventSourcing.eventOut")
   val ei = Inlet[Delivery[Durable[E]]]("EventSourcing.eventIn")
   val ro = Outlet[RES]("EventSourcing.responseOut")
 
-  val shape = BidiShape.of(ci, eo, ei, ro)
+  val shape = BidiShape.of(ri, eo, ei, ro)
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
     new GraphStageLogic(shape) {
@@ -175,12 +175,12 @@ private class EventSourcing[S, E, REQ, RES](
       private var roundtrip: Option[Roundtrip] = None
       private var state: S = initial
 
-      setHandler(ci, new InHandler {
+      setHandler(ri, new InHandler {
         override def onPush(): Unit = {
-          requestHandlerProvider(state)(state, grab(ci)) match {
+          requestHandlerProvider(state)(state, grab(ri)) match {
             case Respond(response) =>
               push(ro, response)
-              tryPullCi()
+              tryPullRi()
             case Emit(events, responseFactory) =>
               val emitted = events.map(Emitted(_, emitterId))
               roundtrip = Some(Roundtrip(emitted.map(_.emissionUuid)(collection.breakOut), responseFactory))
@@ -189,7 +189,7 @@ private class EventSourcing[S, E, REQ, RES](
         }
 
         override def onUpstreamFinish(): Unit =
-          if (roundtrip.isEmpty) super.onUpstreamFinish()
+          if (roundtrip.isEmpty) completeStage()
           else requestUpstreamFinished = true
       })
 
@@ -198,13 +198,13 @@ private class EventSourcing[S, E, REQ, RES](
           grab(ei) match {
             case Recovered =>
               recovered = true
-              tryPullCi()
+              tryPullRi()
             case Delivered(durable) =>
               state = eventHandlerProvider(state)(state, durable.event)
               roundtrip = roundtrip.map(_.delivered(durable.emissionUuid)).flatMap {
                 case r if r.emissionUuids.isEmpty =>
                   push(ro, r.responseFactory(state))
-                  if (requestUpstreamFinished) completeStage() else tryPullCi()
+                  if (requestUpstreamFinished) completeStage() else tryPullRi()
                   None
                 case r =>
                   Some(r)
@@ -216,12 +216,12 @@ private class EventSourcing[S, E, REQ, RES](
 
       setHandler(eo, new OutHandler {
         override def onPull(): Unit =
-          tryPullCi()
+          tryPullRi()
       })
 
       setHandler(ro, new OutHandler {
         override def onPull(): Unit =
-          tryPullCi()
+          tryPullRi()
       })
 
       override def preStart(): Unit =
@@ -230,7 +230,7 @@ private class EventSourcing[S, E, REQ, RES](
       private def tryPullEi(): Unit =
         if (!requestUpstreamFinished) pull(ei)
 
-      private def tryPullCi(): Unit =
-        if (!requestUpstreamFinished && recovered && roundtrip.isEmpty && isAvailable(eo) && isAvailable(ro) && !hasBeenPulled(ci)) pull(ci)
+      private def tryPullRi(): Unit =
+        if (!requestUpstreamFinished && recovered && roundtrip.isEmpty && isAvailable(eo) && isAvailable(ro) && !hasBeenPulled(ri)) pull(ri)
     }
 }
