@@ -31,7 +31,7 @@ import scala.reflect.ClassTag
   *
   * @param journalId Id of the Akka Persistence journal.
   */
-class AkkaPersistenceEventLog(journalId: String)(implicit system: ActorSystem) {
+class AkkaPersistenceEventLog(journalId: String)(implicit system: ActorSystem) extends EventLog[String] {
   private val journal = new Journal(journalId)
 
   /**
