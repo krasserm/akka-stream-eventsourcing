@@ -48,7 +48,7 @@ import scala.reflect.ClassTag
   * @param host Kafka (bootstrap server) host.
   * @param port Kafka (bootstrap server) port.
   */
-class KafkaEventLog(host: String, port: Int)(implicit system: ActorSystem) {
+class KafkaEventLog(host: String, port: Int)(implicit system: ActorSystem) extends EventLog[TopicPartition] {
   private val kafkaSource = new KafkaSource(host, port)
   private val kafkaSink = new KafkaSink(host, port)
   private val kafkaCodec = new KafkaCodec()
